@@ -15,7 +15,7 @@ public:
 public slots:
     void onIdleTick();
 
-    // void onQuit();
+    void onQuit();
 
 private:
     bool initWindow();
@@ -28,8 +28,8 @@ private:
     Engine engine;
     DragonMainWindow* mainWindow;
 
-    QTimer* idleTimer;
-    QTimer* fpsTimer;
+    QTimer* idleTimer = nullptr;
+    QTimer* fpsTimer = nullptr;
     int lastFrameIdx = 0;
 };
 

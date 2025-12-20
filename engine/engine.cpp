@@ -9,6 +9,16 @@
 #pragma comment(lib, "d3d12.lib")
 
 Engine::Engine() {
+#ifdef _DEBUG
+    // Enable the D3D12 debug layer.
+    ID3D12Debug* debugController;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
+        debugController->EnableDebugLayer();
+        debugController->Release();
+    } else {
+        std::cout << "Failed to enable debug interface\n";
+    }
+#endif
     prepareForRendering();
 }
 
@@ -294,23 +304,22 @@ void Engine::writeImageToQImage() {
     const UINT width = static_cast<UINT>(textureDesc.Width);
     const UINT height = textureDesc.Height;
     const UINT rowPitch = renderTargetFootprint.Footprint.RowPitch;
-    const UINT bytesPerPixel = 4;
 
     auto* srcBytes = static_cast<const uint8_t*>(pData);
 
     QImage frame(width, height, QImage::Format_RGBA8888);
+
+    const UINT stride = frame.bytesPerLine();
+    auto* dstBytes = static_cast<uint8_t*>(frame.bits());
+
     for (UINT y = 0; y < height; ++y)
     {
-        const uint8_t* rowStart = srcBytes + y * rowPitch;
+        const uint32_t* srcRow = reinterpret_cast<const uint32_t*>(srcBytes + y * rowPitch);
+        uint32_t* dstRow = reinterpret_cast<uint32_t*>(dstBytes + y * stride);
 
         for (UINT x = 0; x < width; ++x)
         {
-            const uint8_t* pixel = rowStart + x * bytesPerPixel;
-            uint8_t r = pixel[0];
-            uint8_t g = pixel[1];
-            uint8_t b = pixel[2];
-            uint8_t a = pixel[3];
-            frame.setPixelColor(x, y, QColor(r, g, b, a));
+            dstRow[x] = srcRow[x];
         }
     }
 
@@ -372,4 +381,8 @@ void Engine::dumpRenderTargetToPPM() {
 
     // 4. Unmap when done
     readbackBuffer->Unmap(0, nullptr);
+}
+
+void Engine::stopRendering() {
+    // waitForGPURenderFrame();
 }

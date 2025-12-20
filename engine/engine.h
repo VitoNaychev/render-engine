@@ -15,6 +15,8 @@ public:
     Engine();
 
     void renderFrame();
+    void stopRendering();
+
     int getFrameIdx();
     QImage getQImageForFrame();
 

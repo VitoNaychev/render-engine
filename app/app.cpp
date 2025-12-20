@@ -2,6 +2,7 @@
 #include "window.h"
 
 #include <QTimer>
+#include <QCoreApplication>
 
 bool DragonApp::init() {
     if (false == initWindow()) {
@@ -17,11 +18,31 @@ bool DragonApp::init() {
     connect(fpsTimer, &QTimer::timeout, this, &DragonApp::updateRenderStats);
     fpsTimer->start(1'000);
 
+    connect(qApp, &QCoreApplication::aboutToQuit, this, &DragonApp::onQuit);
+
     return true;
 }
 
 void DragonApp::onIdleTick() {
     renderFrame();
+}
+
+void DragonApp::onQuit() {
+    if (idleTimer != nullptr) {
+        idleTimer->stop();
+    }
+    if (fpsTimer != nullptr) {
+        fpsTimer->stop();
+    }
+
+    if (mainWindow != nullptr) {
+        mainWindow->close();
+        delete mainWindow;
+        mainWindow = nullptr;
+    }
+
+    idleTimer = nullptr;
+    fpsTimer = nullptr;
 }
 
 void DragonApp::updateRenderStats() {
@@ -33,7 +54,7 @@ void DragonApp::updateRenderStats() {
 
 bool DragonApp::initWindow() {
     mainWindow = new DragonMainWindow(nullptr);
-    return true;
+    return mainWindow != nullptr;
 }
 
 void DragonApp::renderFrame() {

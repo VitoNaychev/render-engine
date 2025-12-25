@@ -1,9 +1,14 @@
 #include "viewport.h"
 #include <QPainter>
 
-void ViewportWidget::updateImage(const QImage& image) {
-    this->image = image;
-    update();
+
+ViewportWidget::ViewportWidget(QWidget* parent) : QWidget(parent) {
+    setAttribute(Qt::WA_NativeWindow);
+    setAttribute(Qt::WA_DontCreateNativeAncestors);
+}
+
+HWND ViewportWidget::getNativeWindowHanle() {
+    return reinterpret_cast<HWND>(winId());
 }
 
 void ViewportWidget::paintEvent(QPaintEvent* event) {

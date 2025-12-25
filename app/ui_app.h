@@ -32,7 +32,7 @@ public:
     {
         if (Notepad->objectName().isEmpty())
             Notepad->setObjectName("Notepad");
-        Notepad->resize(800, 400);
+        Notepad->resize(800, 600);
 
         // Central widget + layout
         centralWidget = new QWidget(Notepad);
@@ -44,6 +44,7 @@ public:
         mainLayout->setContentsMargins(0, 0, 0, 0);
 
         viewport = new ViewportWidget(centralWidget);
+        viewport->setAttribute(Qt::WA_NativeWindow);
         viewport->setObjectName("viewport");
         mainLayout->addWidget(viewport, 0, 0);
 

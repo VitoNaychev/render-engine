@@ -25,7 +25,7 @@ private:
     void updateRenderStats();
 
 private:
-    Engine engine;
+    Engine* engine;
     DragonMainWindow* mainWindow;
 
     QTimer* idleTimer = nullptr;

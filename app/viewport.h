@@ -7,9 +7,9 @@ class ViewportWidget : public QWidget {
     Q_OBJECT
 
 public:
-    ViewportWidget(QWidget* parent = nullptr) : QWidget(parent) {}
+    ViewportWidget(QWidget* parent = nullptr);
 
-    void updateImage(const QImage& image);
+    HWND getNativeWindowHanle();
 protected:
     void paintEvent(QPaintEvent* event) override;
 

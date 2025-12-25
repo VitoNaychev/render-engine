@@ -8,7 +8,9 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d12.lib")
 
-Engine::Engine() {
+Engine::Engine() {}
+
+Engine::Engine(HWND hwnd) : hwnd(hwnd) {
 #ifdef _DEBUG
     // Enable the D3D12 debug layer.
     ID3D12Debug* debugController;
@@ -22,57 +24,26 @@ Engine::Engine() {
     prepareForRendering();
 }
 
-void Engine::renderFrame() {
-    HRESULT hr;
-
-    frameBegin();
-
-    commandList->OMSetRenderTargets(1, &rtvHandle, false, nullptr);
-
-    commandList->ClearRenderTargetView(rtvHandle, rendColor, 0, nullptr);
-
-    commandList->ResourceBarrier(1, &rtvToCopyBarrier);
-
-    commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
-
-    commandList->ResourceBarrier(1, &copyToRTVBarrier);
-
-    hr = commandList->Close();
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to close command list");
+Engine::~Engine() {
+    if (fenceEvent) {
+        CloseHandle(fenceEvent);
+        fenceEvent = nullptr;
     }
-
-    ID3D12CommandList* lists[] = {commandList.Get()};
-    commandQueue->ExecuteCommandLists(_countof(lists), lists);
-
-    hr = commandQueue->Signal(fence.Get(), fenceValue);
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to create command queue signal");
-    }
-
-    waitForGPURenderFrame();
-    frameEnd();
 }
 
 int Engine::getFrameIdx() {
     return frameIdx;
 }
 
-QImage Engine::getQImageForFrame() {
-    return image;
-}
-
 void Engine::prepareForRendering() {
     createDevice();
 
     createCommandsManagers();
-    createGPUTexture();
+
+    createSwapChain();
     createRenderTargetView();
 
-    createReadbackBuffer();
-    createCopyLocations();
     createBarriers();
-
     createFence();
 }
 
@@ -84,21 +55,29 @@ void Engine::createDevice() {
         throw std::runtime_error("failed to create device factory");
     }
 
-    for (UINT i = 0; dxgiFactory->EnumAdapters1(i, adapter.GetAddressOf()) != DXGI_ERROR_NOT_FOUND; i++) {
-        DXGI_ADAPTER_DESC1 desc;
-        if (FAILED(adapter->GetDesc1(&desc))) {
-            continue;
-        }
-        if (desc.Flags & DXGI_ADAPTER_FLAG3_SOFTWARE) {
-            continue;
-        }
+    for (UINT i = 0; ; ++i) {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        if (dxgiFactory->EnumAdapters1(i, adapter.GetAddressOf()) == DXGI_ERROR_NOT_FOUND)
+            break;
 
-        hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(device.GetAddressOf()));
+        DXGI_ADAPTER_DESC1 desc{};
+        adapter->GetDesc1(&desc);
+
+        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+            continue;
+
+        hr = D3D12CreateDevice(
+            adapter.Get(),
+            D3D_FEATURE_LEVEL_12_0,
+            IID_PPV_ARGS(device.GetAddressOf())
+        );
+
         if (SUCCEEDED(hr)) {
             std::wcout << L"Using: " << desc.Description << std::endl;
             break;
         }
     }
+
 
     if (device.Get() == nullptr) {
         throw std::runtime_error("failed to create device");
@@ -119,41 +98,51 @@ void Engine::createCommandsManagers() {
         throw std::runtime_error("failed to crerate command queue");
     }
 
-    hr = device->CreateCommandAllocator(queueDesc.Type, IID_PPV_ARGS(commandAllocator.GetAddressOf()));
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to crerate command allocator");
-    }
+    for (UINT i = 0; i < bufferCount; ++i) {
+        hr = device->CreateCommandAllocator(queueDesc.Type, IID_PPV_ARGS(commandAllocator[i].GetAddressOf()));
+        if (FAILED(hr)) {
+            throw std::runtime_error("failed to crerate command allocator");
+        }
 
-    hr = device->CreateCommandList(0, queueDesc.Type, commandAllocator.Get(), nullptr, IID_PPV_ARGS(commandList.GetAddressOf()));
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to crerate command list");
+        hr = device->CreateCommandList(0, queueDesc.Type, commandAllocator[i].Get(), nullptr, IID_PPV_ARGS(commandList[i].GetAddressOf()));
+        if (FAILED(hr)) {
+            throw std::runtime_error("failed to crerate command list");
+        }
+        hr = commandList[i]->Close();
+        if (FAILED(hr)) {
+            throw std::runtime_error("failed to close command list");
+        }
     }
 }
 
-void Engine::createGPUTexture() {
+void Engine::createSwapChain() {
     HRESULT hr;
 
-    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    textureDesc.Width = 3;
-    textureDesc.Height = 2;
-    textureDesc.DepthOrArraySize = 1;
-    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    textureDesc.SampleDesc.Count = 1;
-    textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    swapChainDesc.Width = 800;
+    swapChainDesc.Height = 600;
+    swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    swapChainDesc.BufferCount = bufferCount;
+    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    swapChainDesc.SampleDesc.Count = 1;
 
-    D3D12_HEAP_PROPERTIES heapProperties{};
-    heapProperties.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-    hr = device->CreateCommittedResource(
-        &heapProperties,
-        D3D12_HEAP_FLAG_NONE,
-        &textureDesc,
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
+    ComPtr<IDXGISwapChain1> swapChain1;
+    hr = dxgiFactory->CreateSwapChainForHwnd(
+        commandQueue.Get(),
+        hwnd,
+        &swapChainDesc,
         nullptr,
-        IID_PPV_ARGS(renderTarget.GetAddressOf())
+        nullptr,
+        swapChain1.GetAddressOf()
     );
     if (FAILED(hr)) {
-        throw std::runtime_error("failed to create texture");
+        throw std::runtime_error("failed to create swap chain");
+    }
+    dxgiFactory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+
+    hr = swapChain1.As(&swapChain);
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to query IDXGISwapChain3");
     }
 }
 
@@ -161,7 +150,7 @@ void Engine::createRenderTargetView() {
     HRESULT hr;
 
     D3D12_DESCRIPTOR_HEAP_DESC descrHeapDesc{};
-    descrHeapDesc.NumDescriptors = 1;
+    descrHeapDesc.NumDescriptors = bufferCount;
     descrHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
 
     hr = device->CreateDescriptorHeap(&descrHeapDesc, IID_PPV_ARGS(rtvHeap.GetAddressOf()));
@@ -169,82 +158,43 @@ void Engine::createRenderTargetView() {
         throw std::runtime_error("failed to create descriptor heap");
     }
 
-    rtvHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    device->CreateRenderTargetView(
-        renderTarget.Get(),
-        nullptr,
-        rtvHandle
-    );
-}
+    UINT rtvStride = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
 
+    for (UINT i = 0; i < bufferCount; ++ i) {
+        hr = swapChain->GetBuffer(i, IID_PPV_ARGS(backBuffers[i].GetAddressOf()));
+        if (FAILED(hr)) {
+            throw std::runtime_error("failed to get back buffer");
+        }
+        device->CreateRenderTargetView(backBuffers[i].Get(), nullptr, rtvHandle);
 
-void Engine::createReadbackBuffer() {
-    HRESULT hr;
-
-    UINT64 totalBytes;
-    device->GetCopyableFootprints(
-        &textureDesc,
-        0,
-        1,
-        0,
-        &renderTargetFootprint,
-        nullptr,
-        nullptr,
-        &totalBytes
-    );
-
-    D3D12_RESOURCE_DESC readbackBuffDesc{};
-    readbackBuffDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    readbackBuffDesc.Width = totalBytes;
-    readbackBuffDesc.Height = 1;
-    readbackBuffDesc.DepthOrArraySize   = 1;
-    readbackBuffDesc.MipLevels          = 1;
-    readbackBuffDesc.Format = DXGI_FORMAT_UNKNOWN;
-    readbackBuffDesc.SampleDesc.Count   = 1;
-    readbackBuffDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-
-    D3D12_HEAP_PROPERTIES heapProperties{};
-    heapProperties.Type = D3D12_HEAP_TYPE_READBACK;
-
-    hr = device->CreateCommittedResource(
-        &heapProperties,
-        D3D12_HEAP_FLAG_NONE,
-        &readbackBuffDesc,
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        nullptr,
-        IID_PPV_ARGS(readbackBuffer.GetAddressOf())
-    );
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to create readback buffer");
+        this->rtvHandle[i] = rtvHandle;
+        rtvHandle.ptr += rtvStride;
     }
 }
 
-void Engine::createCopyLocations() {
-    source.pResource = renderTarget.Get();
-    source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    source.SubresourceIndex = 0;
-
-    destination.pResource = readbackBuffer.Get();
-    destination.PlacedFootprint = renderTargetFootprint;
-    destination.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-}
-
 void Engine::createBarriers() {
-    rtvToCopyBarrier.Transition.pResource = renderTarget.Get();
-    rtvToCopyBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    rtvToCopyBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    for (UINT i = 0; i < bufferCount; i++) {
+        presentToRTVBarrier[i] = {};
+        presentToRTVBarrier[i].Transition.pResource   = backBuffers[i].Get();
+        presentToRTVBarrier[i].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        presentToRTVBarrier[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
-    copyToRTVBarrier.Transition.pResource = renderTarget.Get();
-    copyToRTVBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    copyToRTVBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        rtvToPresentBarrier[i] = {};
+        rtvToPresentBarrier[i].Transition.pResource   = backBuffers[i].Get();
+        rtvToPresentBarrier[i].Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        rtvToPresentBarrier[i].Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
+    }
 }
 
 void Engine::createFence() {
     HRESULT hr;
 
-    hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf()));
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed tocreate fence");
+    for (UINT i = 0; i < bufferCount; i++) {
+        hr = device->CreateFence(fenceValue[i], D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence[i].GetAddressOf()));
+        if (FAILED(hr)) {
+            throw std::runtime_error("failed to create fence");
+        }
     }
 
     fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -253,7 +203,58 @@ void Engine::createFence() {
     }
 }
 
+void Engine::renderFrame() {
+    HRESULT hr;
+
+    frameBegin();
+
+    commandList[bi]->ResourceBarrier(1, &presentToRTVBarrier[bi]);
+
+    commandList[bi]->OMSetRenderTargets(1, &rtvHandle[bi], FALSE, nullptr);
+
+    commandList[bi]->ClearRenderTargetView(rtvHandle[bi], rendColor, 0, nullptr);
+
+    commandList[bi]->ResourceBarrier(1, rtvToPresentBarrier + bi);
+
+    hr = commandList[bi]->Close();
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to close command list");
+    }
+
+    ID3D12CommandList* lists[] = {commandList[bi].Get()};
+    commandQueue->ExecuteCommandLists(_countof(lists), lists);
+
+    const UINT64 signalValue = ++fenceValue[bi];
+    hr = commandQueue->Signal(fence[bi].Get(), signalValue);
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to create command queue signal");
+    }
+
+    hr = swapChain->Present(1, 0);
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to present buffer");
+    }
+
+    frameEnd();
+}
+
 void Engine::frameBegin() {
+    HRESULT hr;
+
+    bi = swapChain->GetCurrentBackBufferIndex();
+
+    waitForGPURenderFrame();
+
+    hr = commandAllocator[bi]->Reset();
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to reset command allocator");
+    }
+
+    hr = commandList[bi]->Reset(commandAllocator[bi].Get(), nullptr);
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to reset command allocator");
+    }
+
     float frameCoef = static_cast<float>(frameIdx % 1000) / 1000.f;
 
     rendColor[0] = frameCoef;
@@ -263,124 +264,19 @@ void Engine::frameBegin() {
 }
 
 void Engine::frameEnd() {
-    HRESULT hr;
-
-    writeImageToQImage();
-
-    hr = commandAllocator->Reset();
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to reset command allocator");
-    }
-
-    hr = commandList->Reset(commandAllocator.Get(), nullptr);
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to reset command allocator");
-    }
-
     frameIdx++;
 }
 
 void Engine::waitForGPURenderFrame() {
-    if (fence->GetCompletedValue() < fenceValue) {
-        HRESULT hr = fence->SetEventOnCompletion(fenceValue, fenceEvent);
+    if (fence[bi]->GetCompletedValue() < fenceValue[bi]) {
+        HRESULT hr = fence[bi]->SetEventOnCompletion(fenceValue[bi], fenceEvent);
         if (FAILED(hr)) {
-            throw std::runtime_error("failed to set fence event on completion");
+            throw std::runtime_error("failed to  set fence event on completion");
+
         }
 
         WaitForSingleObject(fenceEvent, INFINITE);
     }
-    fenceValue++;
-}
-
-void Engine::writeImageToQImage() {
-    HRESULT hr;
-
-    void* pData;
-    hr = readbackBuffer->Map(0, nullptr, &pData);
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to map readback buffer");
-    }
-
-    const UINT width = static_cast<UINT>(textureDesc.Width);
-    const UINT height = textureDesc.Height;
-    const UINT rowPitch = renderTargetFootprint.Footprint.RowPitch;
-
-    auto* srcBytes = static_cast<const uint8_t*>(pData);
-
-    QImage frame(width, height, QImage::Format_RGBA8888);
-
-    const UINT stride = frame.bytesPerLine();
-    auto* dstBytes = static_cast<uint8_t*>(frame.bits());
-
-    for (UINT y = 0; y < height; ++y)
-    {
-        const uint32_t* srcRow = reinterpret_cast<const uint32_t*>(srcBytes + y * rowPitch);
-        uint32_t* dstRow = reinterpret_cast<uint32_t*>(dstBytes + y * stride);
-
-        for (UINT x = 0; x < width; ++x)
-        {
-            dstRow[x] = srcRow[x];
-        }
-    }
-
-    image = frame;
-}
-
-void Engine::dumpRenderTargetToPPM() {
-    HRESULT hr;
-
-    void* pData;
-    hr = readbackBuffer->Map(0, nullptr, &pData);
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to map readback buffer");
-    }
-
-    const UINT width = static_cast<UINT>(textureDesc.Width);
-    const UINT height = textureDesc.Height;
-    const UINT rowPitch = renderTargetFootprint.Footprint.RowPitch;
-    const UINT bytesPerPixel = 4;
-
-    auto* srcBytes = static_cast<const uint8_t*>(pData);
-    std::cout << uint32_t(srcBytes[0]) << std::endl;
-    std::cout << uint32_t(srcBytes[1]) << std::endl;
-    std::cout << uint32_t(srcBytes[2]) << std::endl;
-    std::cout << uint32_t(srcBytes[3]) << std::endl;
-
-     // 2. Open a binary PPM (P6) file
-    std::ofstream file("output.ppm", std::ios::binary);
-    if (!file) {
-        readbackBuffer->Unmap(0, nullptr);
-        throw std::runtime_error("failed to open output file");
-    }
-
-    // PPM P6 header: "P6\n<width> <height>\n255\n"
-    file << "P3\n" << width << " " << height << "\n255\n";
-
-    // 3. Write pixels row by row
-    // DX12 textures are top-left origin; PPM is also typically top-left,
-    // so we can go y = 0..height-1 directly.
-    for (UINT y = 0; y < height; ++y)
-    {
-        const uint8_t* rowStart = srcBytes + y * rowPitch;
-
-        for (UINT x = 0; x < width; ++x)
-        {
-            const uint8_t* pixel = rowStart + x * bytesPerPixel;
-            uint8_t r = pixel[0];
-            uint8_t g = pixel[1];
-            uint8_t b = pixel[2];
-            // pixel[3] is alpha, ignored for PPM
-            file << static_cast<unsigned int>(r) << " "
-                << static_cast<unsigned int>(g) << " "
-                << static_cast<unsigned int>(b) << " ";
-        }
-        file << "\n";
-    }
-
-    file.close();
-
-    // 4. Unmap when done
-    readbackBuffer->Unmap(0, nullptr);
 }
 
 void Engine::stopRendering() {

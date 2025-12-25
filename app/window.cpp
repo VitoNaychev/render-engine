@@ -21,6 +21,6 @@ void DragonMainWindow::setFPS(const int fps) {
     ui->statusFPS->setText(QString::number(fps));
 }
 
-void DragonMainWindow::updateViewport(const QImage& image) {
-    ui->viewport->updateImage(image);
+HWND DragonMainWindow::getViewportHWND() {
+    return ui->viewport->getNativeWindowHanle();
 }

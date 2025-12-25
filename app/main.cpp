@@ -1,4 +1,6 @@
 #include "app.h"
+#include <iostream>
+#include <exception>
 #include <QApplication>
 
 int main(int argc, char *argv[])

@@ -1,6 +1,8 @@
 #include "app.h"
 #include "window.h"
 
+#include <iostream>
+#include <exception>
 #include <QTimer>
 #include <QCoreApplication>
 
@@ -9,6 +11,8 @@ bool DragonApp::init() {
         return false;
     }
     mainWindow->show();
+
+    engine = new Engine(mainWindow->getViewportHWND());
 
     idleTimer = new QTimer(mainWindow);
     connect(idleTimer, &QTimer::timeout, this, &DragonApp::onIdleTick);
@@ -24,7 +28,11 @@ bool DragonApp::init() {
 }
 
 void DragonApp::onIdleTick() {
-    renderFrame();
+    try {
+        renderFrame();
+    } catch (std::exception e) {
+        std::cerr << "Failed to render frame: " << e.what() << std::endl;
+    }
 }
 
 void DragonApp::onQuit() {
@@ -33,6 +41,11 @@ void DragonApp::onQuit() {
     }
     if (fpsTimer != nullptr) {
         fpsTimer->stop();
+    }
+
+    if (engine != nullptr) {
+        delete engine;
+        engine = nullptr;
     }
 
     if (mainWindow != nullptr) {
@@ -46,7 +59,7 @@ void DragonApp::onQuit() {
 }
 
 void DragonApp::updateRenderStats() {
-    int frameIdx = engine.getFrameIdx();
+    int frameIdx = engine->getFrameIdx();
 
     mainWindow->setFPS(frameIdx - lastFrameIdx);
     lastFrameIdx = frameIdx;
@@ -58,6 +71,5 @@ bool DragonApp::initWindow() {
 }
 
 void DragonApp::renderFrame() {
-    engine.renderFrame();
-    mainWindow->updateViewport(engine.getQImageForFrame());
+    engine->renderFrame();
 }

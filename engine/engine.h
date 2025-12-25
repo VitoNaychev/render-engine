@@ -13,12 +13,14 @@ using Microsoft::WRL::ComPtr;
 class Engine {
 public:
     Engine();
+    Engine(HWND hwnd);
+
+    ~Engine();
 
     void renderFrame();
     void stopRendering();
 
     int getFrameIdx();
-    QImage getQImageForFrame();
 
 private:
     void prepareForRendering();
@@ -27,55 +29,45 @@ private:
 
     void createCommandsManagers();
 
-    void createGPUTexture();
-
+    void createSwapChain();
     void createRenderTargetView();
 
-    void createReadbackBuffer();
-    void createCopyLocations();
     void createBarriers();
-
     void createFence();
-
 
     void frameBegin();
     void frameEnd();
     void waitForGPURenderFrame();
 
-    void writeImageToQImage();
-    void dumpRenderTargetToPPM();
-
 private:
+    static const int bufferCount = 2;
+    int bi{};
+
     ComPtr<IDXGIFactory4> dxgiFactory{};
-    ComPtr<IDXGIAdapter1> adapter{};
     ComPtr<ID3D12Device> device{};
 
     ComPtr<ID3D12CommandQueue> commandQueue{};
-    ComPtr<ID3D12CommandAllocator> commandAllocator{};
-    ComPtr<ID3D12GraphicsCommandList1> commandList{};
+    ComPtr<ID3D12CommandAllocator> commandAllocator[bufferCount];
+    ComPtr<ID3D12GraphicsCommandList1> commandList[bufferCount];
 
-    D3D12_RESOURCE_DESC textureDesc{};
-    ComPtr<ID3D12Resource> renderTarget{};
+    DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
+    ComPtr<IDXGISwapChain3> swapChain{};
+
+    ComPtr<ID3D12Resource> backBuffers[bufferCount];
     ComPtr<ID3D12DescriptorHeap> rtvHeap{};
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle{};
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle[bufferCount];
 
-    ComPtr<ID3D12Resource> readbackBuffer{};
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT renderTargetFootprint{};
+    D3D12_RESOURCE_BARRIER rtvToPresentBarrier[bufferCount];
+    D3D12_RESOURCE_BARRIER presentToRTVBarrier[bufferCount];
 
-    D3D12_TEXTURE_COPY_LOCATION source{};
-    D3D12_TEXTURE_COPY_LOCATION destination{};
-
-    D3D12_RESOURCE_BARRIER rtvToCopyBarrier{};
-    D3D12_RESOURCE_BARRIER copyToRTVBarrier{};
-
-    ComPtr<ID3D12Fence> fence{};
-    HANDLE fenceEvent{};
-    UINT64 fenceValue = 1;
+    ComPtr<ID3D12Fence> fence[bufferCount];
+    HANDLE fenceEvent;
+    UINT64 fenceValue[bufferCount] = {0, 0};
 
     float rendColor[4];
     UINT64 frameIdx = 0;
 
-    QImage image;
+    HWND hwnd;
 };
 
 #endif

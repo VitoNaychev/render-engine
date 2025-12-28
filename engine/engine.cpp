@@ -5,6 +5,8 @@
 
 #include <iostream>
 #include <fstream>
+#include <numbers>
+#include <cmath>
 #include <wrl.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
@@ -221,7 +223,7 @@ void Engine::createVertexBuffer() {
 
     D3D12_RESOURCE_DESC bufDesc{};
     bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    bufDesc.Width = sizeof(triangleVerticies);
+    bufDesc.Width = sizeof(triangles);
     bufDesc.Height = 1;
     bufDesc.DepthOrArraySize = 1;
     bufDesc.MipLevels = 1;
@@ -239,18 +241,6 @@ void Engine::createVertexBuffer() {
     if (FAILED(hr)) {
         throw std::runtime_error("failed to create vertex buffer");
     }
-
-    void* mapped = nullptr;
-    D3D12_RANGE readRange{0, 0};
-    hr = vertexBuffer->Map(0, &readRange, &mapped);
-    if (FAILED(hr)) throw std::runtime_error("failed to map vertex buffer");
-
-    std::memcpy(mapped, triangleVerticies, sizeof(triangleVerticies));
-    vertexBuffer->Unmap(0, nullptr);
-
-    vertexView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
-    vertexView.StrideInBytes = sizeof(Vertex);
-    vertexView.SizeInBytes = sizeof(triangleVerticies);
 }
 
 void Engine::createRootSignature() {
@@ -363,7 +353,7 @@ void Engine::renderFrame() {
     commandList[bi]->RSSetViewports(1, &vp);
     commandList[bi]->RSSetScissorRects(1, &sc);
 
-    commandList[bi]->DrawInstanced(3, 1, 0, 0);
+    commandList[bi]->DrawInstanced(18, 1, 0, 0);
 
     commandList[bi]->ResourceBarrier(1, rtvToPresentBarrier + bi);
 
@@ -406,12 +396,24 @@ void Engine::frameBegin() {
         throw std::runtime_error("failed to reset command allocator");
     }
 
-    float frameCoef = static_cast<float>(frameIdx % 1000) / 1000.f;
+    float pi = std::numbers::pi_v<float>;
+    float angle = 2 * pi / 120 * frameIdx;
+    // triangleVerticies[0] = {std::cos(pi/2 + angle) / 2, std::sin(pi/2 + angle) / 2};
+    // triangleVerticies[2] = {std::cos(7*pi/6 + angle) / 2, std::sin(7*pi/6 + angle) / 2};
+    // triangleVerticies[1] = {std::cos(11*pi/6 + angle) / 2, std::sin(11*pi/6 + angle) / 2};
+    generateHexagon(0.5, angle);
 
-    rendColor[0] = frameCoef;
-    rendColor[1] = 1.f - frameCoef;
-    rendColor[2] = 0.f;
-    rendColor[3] = 1.f;
+    void* mapped = nullptr;
+    D3D12_RANGE readRange{0, 0};
+    hr = vertexBuffer->Map(0, &readRange, &mapped);
+    if (FAILED(hr)) throw std::runtime_error("failed to map vertex buffer");
+
+    std::memcpy(mapped, triangles, sizeof(triangles));
+    vertexBuffer->Unmap(0, nullptr);
+
+    vertexView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
+    vertexView.StrideInBytes = sizeof(Vertex);
+    vertexView.SizeInBytes = sizeof(triangles);
 }
 
 void Engine::frameEnd() {
@@ -427,6 +429,42 @@ void Engine::waitForGPURenderFrame() {
         }
 
         WaitForSingleObject(fenceEvent, INFINITE);
+    }
+}
+
+void Engine::generateHexagon(float x, float angle) {
+    float y = std::sqrt(3.f) * x / 2;
+
+    triangles[0][0] = {0.f, 0.f};
+    triangles[0][1] = {x/2, y};
+    triangles[0][2] = {x, 0.f};
+
+    triangles[1][0] = {0.f, 0.f};
+    triangles[1][1] = {-x/2, y};
+    triangles[1][2] = {x/2, y};
+
+    triangles[2][0] = {0.f, 0.f};
+    triangles[2][1] = {-x, 0.f};
+    triangles[2][2] = {-x/2, y};
+
+    triangles[3][0] = {0.f, 0.f};
+    triangles[3][1] = {-x/2, -y};
+    triangles[3][2] = {-x, 0.f};
+
+    triangles[4][0] = {0.f, 0.f};
+    triangles[4][1] = {x/2, -y};
+    triangles[4][2] = {-x/2, -y};
+
+    triangles[5][0] = {0.f, 0.f};
+    triangles[5][1] = {x, 0.f};
+    triangles[5][2] = {x/2, -y};
+
+    for (auto &triangle : triangles) {
+        for (auto &v : triangle) {
+            float oldX = v.x;
+            v.x = v.x * std::cos(angle) - v.y * std::sin(angle);
+            v.y = oldX * std::sin(angle) + v.y * std::cos(angle);
+        }
     }
 }
 

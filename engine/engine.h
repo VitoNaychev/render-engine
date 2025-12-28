@@ -47,11 +47,13 @@ private:
     void frameEnd();
     void waitForGPURenderFrame();
 
+    void generateHexagon(float x, float angle);
+
 private:
     static const int bufferCount = 2;
     int bi{};
 
-    UINT width = 5, height = 5;
+    UINT width = 600, height = 600;
 
     ComPtr<IDXGIFactory4> dxgiFactory{};
     ComPtr<ID3D12Device> device{};
@@ -81,8 +83,9 @@ private:
     D3D12_VIEWPORT vp{};
     D3D12_RECT sc{};
 
+    Vertex triangles[6][3];
     Vertex triangleVerticies[3] = {{0.0, 0.5}, {0.5, -0.5}, {-0.5, -0.5}};
-    float rendColor[4];
+    float rendColor[4] = {0.f, 0.5f, 0.f, 1.f};
     UINT64 frameIdx = 0;
 
     HWND hwnd;

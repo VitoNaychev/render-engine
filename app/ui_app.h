@@ -32,7 +32,7 @@ public:
     {
         if (Notepad->objectName().isEmpty())
             Notepad->setObjectName("Notepad");
-        Notepad->resize(800, 600);
+        Notepad->resize(600, 600);
 
         // Central widget + layout
         centralWidget = new QWidget(Notepad);

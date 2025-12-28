@@ -1,6 +1,8 @@
 #ifndef ENGINE_H_
 #define ENGINE_H_
 
+#include "types.h"
+
 #include <wrl.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
@@ -35,6 +37,12 @@ private:
     void createBarriers();
     void createFence();
 
+
+    void createVertexBuffer();
+    void createRootSignature();
+    void createPipelineState();
+    void createVpAndSc();
+
     void frameBegin();
     void frameEnd();
     void waitForGPURenderFrame();
@@ -42,6 +50,8 @@ private:
 private:
     static const int bufferCount = 2;
     int bi{};
+
+    UINT width = 5, height = 5;
 
     ComPtr<IDXGIFactory4> dxgiFactory{};
     ComPtr<ID3D12Device> device{};
@@ -64,6 +74,14 @@ private:
     HANDLE fenceEvent;
     UINT64 fenceValue[bufferCount] = {0, 0};
 
+    ComPtr<ID3D12Resource> vertexBuffer{};
+    D3D12_VERTEX_BUFFER_VIEW vertexView{};
+    ComPtr<ID3D12RootSignature> rootSignature{};
+    ComPtr<ID3D12PipelineState> pipelineState{};
+    D3D12_VIEWPORT vp{};
+    D3D12_RECT sc{};
+
+    Vertex triangleVerticies[3] = {{0.0, 0.5}, {0.5, -0.5}, {-0.5, -0.5}};
     float rendColor[4];
     UINT64 frameIdx = 0;
 

@@ -1,12 +1,19 @@
 #include "engine.h"
+#include "types.h"
+#include "const_color_vs.h"
+#include "const_color_ps.h"
 
 #include <iostream>
 #include <fstream>
 #include <wrl.h>
 #include <dxgi1_6.h>
 #include <d3d12.h>
+#include <d3dcompiler.h>
+#include "d3dx12.h"
+
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d12.lib")
+#pragma comment(lib, "d3dcompiler.lib")
 
 Engine::Engine() {}
 
@@ -45,6 +52,11 @@ void Engine::prepareForRendering() {
 
     createBarriers();
     createFence();
+
+    createVertexBuffer();
+    createRootSignature();
+    createPipelineState();
+    createVpAndSc();
 }
 
 void Engine::createDevice() {
@@ -118,8 +130,8 @@ void Engine::createCommandsManagers() {
 void Engine::createSwapChain() {
     HRESULT hr;
 
-    swapChainDesc.Width = 800;
-    swapChainDesc.Height = 600;
+    swapChainDesc.Width = width;
+    swapChainDesc.Height = height;
     swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     swapChainDesc.BufferCount = bufferCount;
     swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -203,6 +215,133 @@ void Engine::createFence() {
     }
 }
 
+void Engine::createVertexBuffer() {
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+
+    D3D12_RESOURCE_DESC bufDesc{};
+    bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufDesc.Width = sizeof(triangleVerticies);
+    bufDesc.Height = 1;
+    bufDesc.DepthOrArraySize = 1;
+    bufDesc.MipLevels = 1;
+    bufDesc.SampleDesc.Count = 1;
+    bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    HRESULT hr = device->CreateCommittedResource(
+        &heapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &bufDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(vertexBuffer.GetAddressOf())
+    );
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to create vertex buffer");
+    }
+
+    void* mapped = nullptr;
+    D3D12_RANGE readRange{0, 0};
+    hr = vertexBuffer->Map(0, &readRange, &mapped);
+    if (FAILED(hr)) throw std::runtime_error("failed to map vertex buffer");
+
+    std::memcpy(mapped, triangleVerticies, sizeof(triangleVerticies));
+    vertexBuffer->Unmap(0, nullptr);
+
+    vertexView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
+    vertexView.StrideInBytes = sizeof(Vertex);
+    vertexView.SizeInBytes = sizeof(triangleVerticies);
+}
+
+void Engine::createRootSignature() {
+    D3D12_ROOT_SIGNATURE_DESC sigDesc{};
+    sigDesc.NumParameters = 0;
+    sigDesc.pParameters = nullptr;
+    sigDesc.NumStaticSamplers = 0;
+    sigDesc.pStaticSamplers = nullptr;
+    sigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+    ComPtr<ID3DBlob> sigBlob;
+    ComPtr<ID3DBlob> errBlob;
+
+    HRESULT hr = D3D12SerializeRootSignature(
+        &sigDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        sigBlob.GetAddressOf(),
+        errBlob.GetAddressOf()
+    );
+
+    if (FAILED(hr)) {
+        if (errBlob) {
+            std::cerr << (const char*)errBlob->GetBufferPointer() << "\n";
+        }
+        throw std::runtime_error("D3D12SerializeRootSignature failed");
+    }
+
+    hr = device->CreateRootSignature(
+        0, // nodeMask
+        sigBlob->GetBufferPointer(),
+        sigBlob->GetBufferSize(),
+        IID_PPV_ARGS(rootSignature.GetAddressOf())
+    );
+    if (FAILED(hr)) {
+        throw std::runtime_error("CreateRootSignature failed");
+    }
+}
+
+void Engine::createPipelineState() {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
+    pso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+    pso.SampleMask = UINT_MAX;
+    pso.NumRenderTargets = 1;
+    pso.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    pso.SampleDesc.Count = 1;
+
+    pso.pRootSignature = rootSignature.Get();
+
+    pso.VS.pShaderBytecode  = g_const_color_vs;
+    pso.VS.BytecodeLength = sizeof(g_const_color_vs);
+
+    pso.PS.pShaderBytecode = g_const_color_ps;
+    pso.PS.BytecodeLength = sizeof(g_const_color_ps);
+
+    // Required defaults
+    pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    pso.BlendState      = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    pso.DepthStencilState.DepthEnable   = FALSE;
+    pso.DepthStencilState.StencilEnable = FALSE;
+
+
+    D3D12_INPUT_ELEMENT_DESC inputDesc{};
+    inputDesc.SemanticName = "POSITION";
+    inputDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+    inputDesc.InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+
+    pso.InputLayout = { &inputDesc, 1 };
+
+    HRESULT hr = device->CreateGraphicsPipelineState(
+        &pso,
+        IID_PPV_ARGS(pipelineState.GetAddressOf())
+    );
+    if (FAILED(hr)) throw std::runtime_error("failed to crate graphics pipeline state");
+}
+
+void Engine::createVpAndSc() {
+    vp.TopLeftX = 0.0f;
+    vp.TopLeftY = 0.0f;
+    vp.Width    = (float)width;
+    vp.Height   = (float)height;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+
+    sc.left   = 0;
+    sc.top    = 0;
+    sc.right  = (LONG)width;
+    sc.bottom = (LONG)height;
+}
+
+
 void Engine::renderFrame() {
     HRESULT hr;
 
@@ -213,6 +352,18 @@ void Engine::renderFrame() {
     commandList[bi]->OMSetRenderTargets(1, &rtvHandle[bi], FALSE, nullptr);
 
     commandList[bi]->ClearRenderTargetView(rtvHandle[bi], rendColor, 0, nullptr);
+
+    commandList[bi]->SetPipelineState(pipelineState.Get());
+
+    commandList[bi]->SetGraphicsRootSignature(rootSignature.Get());
+
+    commandList[bi]->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList[bi]->IASetVertexBuffers(0, 1, &vertexView);
+
+    commandList[bi]->RSSetViewports(1, &vp);
+    commandList[bi]->RSSetScissorRects(1, &sc);
+
+    commandList[bi]->DrawInstanced(3, 1, 0, 0);
 
     commandList[bi]->ResourceBarrier(1, rtvToPresentBarrier + bi);
 

@@ -39,6 +39,7 @@ private:
 
 
     void createVertexBuffer();
+    void uploadVertexData();
     void createRootSignature();
     void createPipelineState();
     void createVpAndSc();
@@ -47,7 +48,7 @@ private:
     void frameEnd();
     void waitForGPURenderFrame();
 
-    void generateHexagon(float x, float angle);
+    void generateHexagon(float x);
 
 private:
     static const int bufferCount = 2;
@@ -59,8 +60,8 @@ private:
     ComPtr<ID3D12Device> device{};
 
     ComPtr<ID3D12CommandQueue> commandQueue{};
-    ComPtr<ID3D12CommandAllocator> commandAllocator[bufferCount];
-    ComPtr<ID3D12GraphicsCommandList1> commandList[bufferCount];
+    ComPtr<ID3D12CommandAllocator> commandAllocator;
+    ComPtr<ID3D12GraphicsCommandList1> commandList;
 
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc{};
     ComPtr<IDXGISwapChain3> swapChain{};
@@ -72,10 +73,11 @@ private:
     D3D12_RESOURCE_BARRIER rtvToPresentBarrier[bufferCount];
     D3D12_RESOURCE_BARRIER presentToRTVBarrier[bufferCount];
 
-    ComPtr<ID3D12Fence> fence[bufferCount];
+    ComPtr<ID3D12Fence> fence;
     HANDLE fenceEvent;
-    UINT64 fenceValue[bufferCount] = {0, 0};
+    UINT64 fenceValue = 0;
 
+    ComPtr<ID3D12Resource> uploadBuffer{};
     ComPtr<ID3D12Resource> vertexBuffer{};
     D3D12_VERTEX_BUFFER_VIEW vertexView{};
     ComPtr<ID3D12RootSignature> rootSignature{};

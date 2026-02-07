@@ -56,6 +56,8 @@ void Engine::prepareForRendering() {
     createFence();
 
     createVertexBuffer();
+    uploadVertexData();
+
     createRootSignature();
     createPipelineState();
     createVpAndSc();
@@ -112,20 +114,28 @@ void Engine::createCommandsManagers() {
         throw std::runtime_error("failed to crerate command queue");
     }
 
-    for (UINT i = 0; i < bufferCount; ++i) {
-        hr = device->CreateCommandAllocator(queueDesc.Type, IID_PPV_ARGS(commandAllocator[i].GetAddressOf()));
-        if (FAILED(hr)) {
-            throw std::runtime_error("failed to crerate command allocator");
-        }
+    hr = device->CreateCommandAllocator(queueDesc.Type, IID_PPV_ARGS(commandAllocator.GetAddressOf()));
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to crerate command allocator");
+    }
 
-        hr = device->CreateCommandList(0, queueDesc.Type, commandAllocator[i].Get(), nullptr, IID_PPV_ARGS(commandList[i].GetAddressOf()));
-        if (FAILED(hr)) {
-            throw std::runtime_error("failed to crerate command list");
-        }
-        hr = commandList[i]->Close();
-        if (FAILED(hr)) {
-            throw std::runtime_error("failed to close command list");
-        }
+    hr = device->CreateCommandList(0, queueDesc.Type, commandAllocator.Get(), nullptr, IID_PPV_ARGS(commandList.GetAddressOf()));
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to crerate command list");
+    }
+    hr = commandList->Close();
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to reset command allocator");
+    }
+
+    hr = commandAllocator->Reset();
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to reset command allocator");
+    }
+
+    hr = commandList->Reset(commandAllocator.Get(), nullptr);
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to reset command allocator");
     }
 }
 
@@ -204,11 +214,9 @@ void Engine::createBarriers() {
 void Engine::createFence() {
     HRESULT hr;
 
-    for (UINT i = 0; i < bufferCount; i++) {
-        hr = device->CreateFence(fenceValue[i], D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence[i].GetAddressOf()));
-        if (FAILED(hr)) {
-            throw std::runtime_error("failed to create fence");
-        }
+    hr = device->CreateFence(fenceValue, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(fence.GetAddressOf()));
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to create fence");
     }
 
     fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -218,8 +226,11 @@ void Engine::createFence() {
 }
 
 void Engine::createVertexBuffer() {
-    D3D12_HEAP_PROPERTIES heapProps{};
-    heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
+    D3D12_HEAP_PROPERTIES defaultHeapProps{};
+    defaultHeapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    D3D12_HEAP_PROPERTIES uploadHeapProps{};
+    uploadHeapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
 
     D3D12_RESOURCE_DESC bufDesc{};
     bufDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -231,22 +242,83 @@ void Engine::createVertexBuffer() {
     bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     HRESULT hr = device->CreateCommittedResource(
-        &heapProps,
+        &uploadHeapProps,
         D3D12_HEAP_FLAG_NONE,
         &bufDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(uploadBuffer.GetAddressOf())
+    );
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to create upload buffer");
+    }
+
+    hr = device->CreateCommittedResource(
+        &defaultHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &bufDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
         nullptr,
         IID_PPV_ARGS(vertexBuffer.GetAddressOf())
     );
     if (FAILED(hr)) {
         throw std::runtime_error("failed to create vertex buffer");
     }
+
+    vertexView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
+    vertexView.StrideInBytes = sizeof(Vertex);
+    vertexView.SizeInBytes = sizeof(triangles);
+}
+
+void Engine::uploadVertexData() {
+    generateHexagon(0.5);
+
+    void* mapped = nullptr;
+    D3D12_RANGE readRange{0, 0};
+    HRESULT hr = uploadBuffer->Map(0, &readRange, &mapped);
+    if (FAILED(hr)) throw std::runtime_error("failed to map vertex buffer");
+
+    std::memcpy(mapped, triangles, sizeof(triangles));
+    uploadBuffer->Unmap(0, nullptr);
+
+    commandList->CopyBufferRegion(vertexBuffer.Get(), 0, uploadBuffer.Get(), 0, sizeof(triangles));
+
+    std::cout << 100 << std::endl;
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource  = vertexBuffer.Get();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter  = D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+    commandList->ResourceBarrier(1, &barrier);
+
+    hr = commandList->Close();
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to close command list");
+    }
+
+    ID3D12CommandList* lists[] = {commandList.Get()};
+    commandQueue->ExecuteCommandLists(_countof(lists), lists);
+
+    waitForGPURenderFrame();
 }
 
 void Engine::createRootSignature() {
+    D3D12_ROOT_CONSTANTS frameIdx{};
+    frameIdx.ShaderRegister = 0;
+    frameIdx.RegisterSpace = 0;
+    frameIdx.Num32BitValues = 1;
+
+    D3D12_ROOT_PARAMETER parameter{};
+    parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    parameter.Constants = frameIdx;
+
+
     D3D12_ROOT_SIGNATURE_DESC sigDesc{};
-    sigDesc.NumParameters = 0;
-    sigDesc.pParameters = nullptr;
+    sigDesc.NumParameters = 1;
+    sigDesc.pParameters = &parameter;
     sigDesc.NumStaticSamplers = 0;
     sigDesc.pStaticSamplers = nullptr;
     sigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
@@ -303,12 +375,10 @@ void Engine::createPipelineState() {
     pso.DepthStencilState.StencilEnable = FALSE;
 
 
-    D3D12_INPUT_ELEMENT_DESC inputDesc{};
-    inputDesc.SemanticName = "POSITION";
-    inputDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
-    inputDesc.InputSlotClass = D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
-
-    pso.InputLayout = { &inputDesc, 1 };
+    D3D12_INPUT_ELEMENT_DESC inputLayout[]{
+        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
+    };
+    pso.InputLayout = { inputLayout, _countof(inputLayout)};
 
     HRESULT hr = device->CreateGraphicsPipelineState(
         &pso,
@@ -337,39 +407,33 @@ void Engine::renderFrame() {
 
     frameBegin();
 
-    commandList[bi]->ResourceBarrier(1, &presentToRTVBarrier[bi]);
+    commandList->ResourceBarrier(1, &presentToRTVBarrier[bi]);
 
-    commandList[bi]->OMSetRenderTargets(1, &rtvHandle[bi], FALSE, nullptr);
+    commandList->OMSetRenderTargets(1, &rtvHandle[bi], FALSE, nullptr);
 
-    commandList[bi]->ClearRenderTargetView(rtvHandle[bi], rendColor, 0, nullptr);
+    commandList->ClearRenderTargetView(rtvHandle[bi], rendColor, 0, nullptr);
 
-    commandList[bi]->SetPipelineState(pipelineState.Get());
+    commandList->SetPipelineState(pipelineState.Get());
+    commandList->SetGraphicsRootSignature(rootSignature.Get());
+    commandList->SetGraphicsRoot32BitConstant(0, frameIdx, 0);
 
-    commandList[bi]->SetGraphicsRootSignature(rootSignature.Get());
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->IASetVertexBuffers(0, 1, &vertexView);
 
-    commandList[bi]->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    commandList[bi]->IASetVertexBuffers(0, 1, &vertexView);
+    commandList->RSSetViewports(1, &vp);
+    commandList->RSSetScissorRects(1, &sc);
 
-    commandList[bi]->RSSetViewports(1, &vp);
-    commandList[bi]->RSSetScissorRects(1, &sc);
+    commandList->DrawInstanced(18, 1, 0, 0);
 
-    commandList[bi]->DrawInstanced(18, 1, 0, 0);
+    commandList->ResourceBarrier(1, rtvToPresentBarrier + bi);
 
-    commandList[bi]->ResourceBarrier(1, rtvToPresentBarrier + bi);
-
-    hr = commandList[bi]->Close();
+    hr = commandList->Close();
     if (FAILED(hr)) {
         throw std::runtime_error("failed to close command list");
     }
 
-    ID3D12CommandList* lists[] = {commandList[bi].Get()};
+    ID3D12CommandList* lists[] = {commandList.Get()};
     commandQueue->ExecuteCommandLists(_countof(lists), lists);
-
-    const UINT64 signalValue = ++fenceValue[bi];
-    hr = commandQueue->Signal(fence[bi].Get(), signalValue);
-    if (FAILED(hr)) {
-        throw std::runtime_error("failed to create command queue signal");
-    }
 
     hr = swapChain->Present(1, 0);
     if (FAILED(hr)) {
@@ -386,34 +450,15 @@ void Engine::frameBegin() {
 
     waitForGPURenderFrame();
 
-    hr = commandAllocator[bi]->Reset();
+    hr = commandAllocator->Reset();
     if (FAILED(hr)) {
         throw std::runtime_error("failed to reset command allocator");
     }
 
-    hr = commandList[bi]->Reset(commandAllocator[bi].Get(), nullptr);
+    hr = commandList->Reset(commandAllocator.Get(), nullptr);
     if (FAILED(hr)) {
         throw std::runtime_error("failed to reset command allocator");
     }
-
-    float pi = std::numbers::pi_v<float>;
-    float angle = 2 * pi / 120 * frameIdx;
-    // triangleVerticies[0] = {std::cos(pi/2 + angle) / 2, std::sin(pi/2 + angle) / 2};
-    // triangleVerticies[2] = {std::cos(7*pi/6 + angle) / 2, std::sin(7*pi/6 + angle) / 2};
-    // triangleVerticies[1] = {std::cos(11*pi/6 + angle) / 2, std::sin(11*pi/6 + angle) / 2};
-    generateHexagon(0.5, angle);
-
-    void* mapped = nullptr;
-    D3D12_RANGE readRange{0, 0};
-    hr = vertexBuffer->Map(0, &readRange, &mapped);
-    if (FAILED(hr)) throw std::runtime_error("failed to map vertex buffer");
-
-    std::memcpy(mapped, triangles, sizeof(triangles));
-    vertexBuffer->Unmap(0, nullptr);
-
-    vertexView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
-    vertexView.StrideInBytes = sizeof(Vertex);
-    vertexView.SizeInBytes = sizeof(triangles);
 }
 
 void Engine::frameEnd() {
@@ -421,8 +466,14 @@ void Engine::frameEnd() {
 }
 
 void Engine::waitForGPURenderFrame() {
-    if (fence[bi]->GetCompletedValue() < fenceValue[bi]) {
-        HRESULT hr = fence[bi]->SetEventOnCompletion(fenceValue[bi], fenceEvent);
+    const UINT64 signalValue = ++fenceValue;
+    HRESULT hr = commandQueue->Signal(fence.Get(), signalValue);
+    if (FAILED(hr)) {
+        throw std::runtime_error("failed to create command queue signal");
+    }
+
+    if (fence->GetCompletedValue() < fenceValue) {
+        HRESULT hr = fence->SetEventOnCompletion(fenceValue, fenceEvent);
         if (FAILED(hr)) {
             throw std::runtime_error("failed to  set fence event on completion");
 
@@ -432,7 +483,7 @@ void Engine::waitForGPURenderFrame() {
     }
 }
 
-void Engine::generateHexagon(float x, float angle) {
+void Engine::generateHexagon(float x) {
     float y = std::sqrt(3.f) * x / 2;
 
     triangles[0][0] = {0.f, 0.f};
@@ -458,14 +509,6 @@ void Engine::generateHexagon(float x, float angle) {
     triangles[5][0] = {0.f, 0.f};
     triangles[5][1] = {x, 0.f};
     triangles[5][2] = {x/2, -y};
-
-    for (auto &triangle : triangles) {
-        for (auto &v : triangle) {
-            float oldX = v.x;
-            v.x = v.x * std::cos(angle) - v.y * std::sin(angle);
-            v.y = oldX * std::sin(angle) + v.y * std::cos(angle);
-        }
-    }
 }
 
 void Engine::stopRendering() {

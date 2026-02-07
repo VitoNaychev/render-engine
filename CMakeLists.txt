@@ -51,7 +51,7 @@ compile_hlsl_header(
     EngineApp
     ${SHADER_DIR}/ConstColorVS.hlsl
     VSMain
-    vs_6_0
+    vs_6_3
     ${GEN_DIR}/const_color_vs.h
     g_const_color_vs
 )
@@ -60,7 +60,7 @@ compile_hlsl_header(
     EngineApp
     ${SHADER_DIR}/ConstColor.hlsl
     PSMain
-    ps_6_0
+    ps_6_3
     ${GEN_DIR}/const_color_ps.h
     g_const_color_ps
 )
